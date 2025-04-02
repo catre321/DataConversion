@@ -1,0 +1,12 @@
+# Excel files
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.xltx
+*.xltm
+*.xlt
+*.csv
+
+# Temporary Excel files
+~$*.xls*
