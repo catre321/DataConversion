@@ -82,9 +82,9 @@ if __name__ == "__main__":
     start_time = time.time()
 
     # Load the data from the Excel file
-    INPUT_FILE = 'C:/Users/dorem/Downloads/bank.xlsx' 
+    INPUT_FILE = 'Book1.xlsx' 
     INPUT_FILE = INPUT_FILE.strip('\u202a')
-    OUTPUT_FILE = 'loai1output_file.xlsx'
+    OUTPUT_FILE = 'Book1Output.xlsx'
 
     # Load the Excel file
     xls = pd.ExcelFile(INPUT_FILE)
@@ -116,12 +116,12 @@ if __name__ == "__main__":
     # Extract the first 4 col in the headers, which are the company headers (not taking the No)
     company_headers = [headers[0]]
 
-    general_headers = headers[0:1]
+    general_headers = [headers[0]]
     general_headers.append("Year")
     general_headers.extend(sheet_names)
 
     # Get the number of years
-    years = headers[2:]
+    years = headers[1:]
     print(f"Years: {years}")
 
     # Calculate the number of rows per thread
@@ -154,11 +154,23 @@ if __name__ == "__main__":
 
     print("Done with making dataframe, now saving...")
 
-    # Save DataFrame to a CSV file
-    # df.to_csv('output_file.csv', index=False)
+    # Handle the Excel row limit by splitting into multiple sheets
+    MAX_ROWS_PER_SHEET = 1000000  # Just under Excel's limit for safety
+    
+    # Create a writer object with xlsxwriter engine
+    with pd.ExcelWriter(OUTPUT_FILE, engine='xlsxwriter') as writer:
+        # Calculate how many sheets we need
+        num_sheets = (len(df) // MAX_ROWS_PER_SHEET) + (1 if len(df) % MAX_ROWS_PER_SHEET else 0)
+        
+        for i in range(num_sheets):
+            start_idx = i * MAX_ROWS_PER_SHEET
+            end_idx = min((i + 1) * MAX_ROWS_PER_SHEET, len(df))
+            
+            sheet_name = f"Data_Part_{i+1}"
+            df.iloc[start_idx:end_idx].to_excel(writer, sheet_name=sheet_name, index=False)
+            print(f"Saved sheet {sheet_name} with {end_idx - start_idx} rows")
 
-    # Alternatively, to save as an Excel file (the xlsxwriter engine is faster)
-    df.to_excel(OUTPUT_FILE, index=False, engine = 'xlsxwriter')
+    print(f"Data saved to {OUTPUT_FILE} in {num_sheets} sheets")
 
     print(df)
 
