@@ -7,6 +7,6 @@
 *.xltm
 *.xlt
 *.csv
-
+.venv/*
 # Temporary Excel files
 ~$*.xls*

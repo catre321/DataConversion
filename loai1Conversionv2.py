@@ -3,7 +3,44 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 import os
 import pandas as pd
+import msvcrt  # For Windows file locking check
 
+# CONST VARIABLES
+# Load the data from the Excel file
+INPUT_FILE = 'loai 1Short.xlsx' 
+INPUT_FILE = INPUT_FILE.strip('\u202a')
+OUTPUT_FILE = 'loai1Out.xlsx'
+
+# Set the number of rows to read from each sheet
+NO_OF_ROWS = None 
+
+# Set the year columns to read from each sheet (counting from 0)
+YEAR_COL_START = 5
+
+# Set the company header range to read from each sheet (counting from 0) 
+COM_COL_START = 0
+COM_COL_END = 5     # From 0 to 5, not including 5
+
+# Set the Sheet range to read from (counting from 0)
+SHEET_START = 0
+SHEET_END = None    # None = read all sheets
+
+# Check if the output file is open in another program
+def is_file_locked(filepath):
+    """Check if a file is locked by another process"""
+    if not os.path.exists(filepath):
+        return False
+    try:
+        # Try to open the file in write mode
+        with open(filepath, 'ab') as f:
+            # Try to get an exclusive lock
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            # If we get here, the file is not locked
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        return False
+    except (IOError, PermissionError):
+        return True
+    
 # Function to read a sheet
 def read_sheet(_input_file, _sheet_index, _sheet_name, _sheet_names):
     _xls = pd.ExcelFile(_input_file)
@@ -13,7 +50,7 @@ def read_sheet(_input_file, _sheet_index, _sheet_name, _sheet_names):
     print(f"Reading sheet: {_sheet_name}... {_percentage:.2f}%", flush=True)
 
     # Read the sheet, nrows = No of row to read, None = read all
-    return _sheet_name, pd.read_excel(_xls, sheet_name=_sheet_name, header=0, nrows=None)
+    return _sheet_name, pd.read_excel(_xls, sheet_name=_sheet_name, header=0, nrows=NO_OF_ROWS)
 
 def process_rows(_row_range, _sheets_data, _sheet_names, _years, _company_headers, _general_headers):
     _start_row, _end_row = _row_range
@@ -74,6 +111,12 @@ def process_rows(_row_range, _sheets_data, _sheet_names, _years, _company_header
 
 ########################## MAIN FUNCTION ############################
 if __name__ == "__main__":
+    
+    # Check if output file is open before proceeding
+    if os.path.exists(OUTPUT_FILE) and is_file_locked(OUTPUT_FILE):
+        raise IOError(f"ERROR: The output file '{OUTPUT_FILE}' is currently open in another program. "
+                    f"Please close it and run the script again.")
+        
     # Get number of CPU cores
     num_cpu = os.cpu_count()
     print(f"Number of CPU cores: {num_cpu}")
@@ -81,16 +124,14 @@ if __name__ == "__main__":
     # Start time
     start_time = time.time()
 
-    # Load the data from the Excel file
-    INPUT_FILE = 'Book1.xlsx' 
-    INPUT_FILE = INPUT_FILE.strip('\u202a')
-    OUTPUT_FILE = 'Book1Output.xlsx'
 
     # Load the Excel file
     xls = pd.ExcelFile(INPUT_FILE)
     # Get the sheet names
-    # sheet_names = xls.sheet_names[0:4] # Get the first 3 sheets to load faster
-    sheet_names = xls.sheet_names
+    if SHEET_END is None:   # If SHEET_END is None, read all sheets
+        SHEET_END = len(xls.sheet_names)
+    sheet_names = xls.sheet_names[SHEET_START:SHEET_END] # Get the first 3 sheets to load faster
+    # sheet_names = xls.sheet_names
     index = 0
 
     # Initialize a dictionary to hold data for each sheet
@@ -114,14 +155,14 @@ if __name__ == "__main__":
     headers = sheets_data[sheet_names[0]].columns.tolist()
 
     # Extract the first 4 col in the headers, which are the company headers (not taking the No)
-    company_headers = [headers[0]]
-
-    general_headers = [headers[0]]
+    company_headers = headers[COM_COL_START:COM_COL_END]
+    print(f"Company headers: {company_headers}")
+    general_headers = headers[COM_COL_START:COM_COL_END]
     general_headers.append("Year")
     general_headers.extend(sheet_names)
 
     # Get the number of years
-    years = headers[1:]
+    years = headers[YEAR_COL_START:]
     print(f"Years: {years}")
 
     # Calculate the number of rows per thread
@@ -171,6 +212,51 @@ if __name__ == "__main__":
             print(f"Saved sheet {sheet_name} with {end_idx - start_idx} rows")
 
     print(f"Data saved to {OUTPUT_FILE} in {num_sheets} sheets")
+    
+    # Add a statistics sheet showing percentage of blank cells for each column
+    print("Generating statistics on blank cells...")
+    stats = {}
+    
+    # Calculate statistics for data columns (sheets)
+    for column in sheet_names:
+        print(f"Processing column: {column}")
+        total_cells = len(df[column])
+        blank_cells = df[column].isna().sum()
+        percent_blank = (blank_cells / total_cells) * 100 if total_cells > 0 else 0
+        print(f"Total Cells: {total_cells}, Blank Cells: {blank_cells}, Percent Blank: {percent_blank:.2f}%")
+        stats[column] = {
+            'Total Cells': total_cells,
+            'Blank Cells': blank_cells,
+            'Percent Blank': percent_blank / 100  # Store as decimal for Excel formatting
+        }
+    
+    # Create a DataFrame for the statistics
+    stats_df = pd.DataFrame({
+        'Column': list(stats.keys()),
+        'Total Cells': [stats[col]['Total Cells'] for col in stats],
+        'Blank Cells': [stats[col]['Blank Cells'] for col in stats],
+        'Percent Blank': [stats[col]['Percent Blank'] for col in stats]
+    })
+    
+    # Append statistics to the Excel file
+    with pd.ExcelWriter(OUTPUT_FILE, mode='a', engine='openpyxl') as writer:
+        # Don't save the index
+        stats_df.to_excel(writer, sheet_name='Blank Cells Statistics', index=False)
+        
+        # Get the workbook and worksheet
+        workbook = writer.book
+        worksheet = writer.sheets['Blank Cells Statistics']
+        
+        # Format the Percent Blank column to show as percentage
+        # Find the column index for 'Percent Blank'
+        percent_col_index = stats_df.columns.get_loc('Percent Blank') + 1  # +1 because Excel is 1-indexed
+        
+        # Format the percentage column
+        for idx in range(2, len(stats_df) + 2):  # Start at row 2 (after header)
+            cell = worksheet.cell(row=idx, column=percent_col_index)
+            cell.number_format = '0.00%'
+    
+    print("Statistics sheet added successfully")
 
     print(df)
 
